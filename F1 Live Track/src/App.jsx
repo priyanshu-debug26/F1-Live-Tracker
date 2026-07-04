@@ -2,6 +2,33 @@ import logo from './assets/logo.png';
 import { useEffect, useState, useRef } from 'react';
 import { staticTracks } from './assets/staticTracks.js';
 
+const CIRCUIT_GP_NAMES = {
+  "Sakhir": "Bahrain Grand Prix",
+  "Jeddah": "Saudi Arabian Grand Prix",
+  "Melbourne": "Australian Grand Prix",
+  "Suzuka": "Japanese Grand Prix",
+  "Shanghai": "Chinese Grand Prix",
+  "Miami": "Miami Grand Prix",
+  "Imola": "Emilia Romagna Grand Prix",
+  "Monte Carlo": "Monaco Grand Prix",
+  "Montreal": "Canadian Grand Prix",
+  "Catalunya": "Spanish Grand Prix",
+  "Spielberg": "Austrian Grand Prix (Red Bull Ring)",
+  "Silverstone": "British Grand Prix",
+  "Hungaroring": "Hungarian Grand Prix",
+  "Spa-Francorchamps": "Belgian Grand Prix",
+  "Zandvoort": "Dutch Grand Prix",
+  "Monza": "Italian Grand Prix",
+  "Baku": "Azerbaijan Grand Prix",
+  "Singapore": "Singapore Grand Prix",
+  "Austin": "United States Grand Prix (COTA)",
+  "Mexico City": "Mexico City Grand Prix",
+  "Interlagos": "São Paulo Grand Prix",
+  "Las Vegas": "Las Vegas Grand Prix",
+  "Lusail": "Qatar Grand Prix",
+  "Yas Marina Circuit": "Abu Dhabi Grand Prix"
+};
+
 function App() {
   // Session lists and selections
   const [selectedYear, setSelectedYear] = useState("2024");
@@ -58,8 +85,17 @@ function App() {
           if (!s.meeting_key || s.is_cancelled) return;
           const key = s.meeting_key;
           if (!gpMap[key]) {
+            // Determine if this session is a pre-season test
+            const isTesting = s.session_name?.toLowerCase().includes("day") || 
+                              s.session_name?.toLowerCase().includes("test") ||
+                              s.session_type?.toLowerCase().includes("test");
+            
+            const officialGPName = CIRCUIT_GP_NAMES[s.circuit_short_name] || s.circuit_short_name || "Grand Prix";
+            const gpLabel = isTesting ? `Pre-Season Testing (${s.location || s.circuit_short_name})` : officialGPName;
+
             gpMap[key] = {
               meeting_key: key,
+              gpLabel: gpLabel,
               location: s.location || s.circuit_short_name,
               circuit_name: s.circuit_short_name,
               country: s.country_name,
@@ -418,14 +454,15 @@ function App() {
         if (hTime <= playTimeMs) {
           const existing = latestPositions[h.driver_number];
           if (!existing || hTime > new Date(existing.date).getTime()) {
-            latestPositions[h.driver_number] = h.position;
+            latestPositions[h.driver_number] = h;
           }
         }
       });
 
       // Merge standings with driver metadata
       const standings = Object.values(drivers).map(d => {
-        const currentPos = latestPositions[d.number] || 99; // default to back if unknown
+        const posRecord = latestPositions[d.number];
+        const currentPos = posRecord ? posRecord.position : 99; // default to back if unknown
         return {
           ...d,
           position: currentPos
@@ -551,7 +588,7 @@ function App() {
               <select value={selectedMeetingKey} onChange={(e) => handleGPChange(e.target.value)}>
                 {grandPrixList.map(g => (
                   <option key={g.meeting_key} value={g.meeting_key}>
-                    {g.location} ({g.circuit_name})
+                    {g.gpLabel}
                   </option>
                 ))}
               </select>
