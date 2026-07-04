@@ -1,148 +1,862 @@
 import logo from './assets/logo.png';
-import { useEffect, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { staticTracks } from './assets/staticTracks.js';
 
 function App() {
-  const carsRef = useRef([]);
-  const svgRef = useRef(null);
+  // Session lists and selections
+  const [selectedYear, setSelectedYear] = useState("2024");
+  const [sessions, setSessions] = useState([]);
+  const [grandPrixList, setGrandPrixList] = useState([]);
+  const [selectedMeetingKey, setSelectedMeetingKey] = useState("");
+  const [selectedSessionKey, setSelectedSessionKey] = useState("");
+  const [selectedSession, setSelectedSession] = useState(null);
 
-  const drivers = [
-    { name: "VER", color: "#3671C6", progress: 0, speed: 2.40 },
-    { name: "TSU", color: "#3671C6", progress: 25, speed: 2.15 },
+  // F1 Data
+  const [drivers, setDrivers] = useState({});
+  const [driversList, setDriversList] = useState([]);
+  const [trackPath, setTrackPath] = useState("");
+  const [scaleInfo, setScaleInfo] = useState(null);
+  const [positionHistory, setPositionHistory] = useState([]);
 
-    { name: "NOR", color: "#FF8000", progress: 50, speed: 2.35 },
-    { name: "PIA", color: "#FF8000", progress: 75, speed: 2.33 },
+  // Playback Control States
+  const [playbackTime, setPlaybackTime] = useState(null);
+  const [sessionStart, setSessionStart] = useState(null);
+  const [sessionEnd, setSessionEnd] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(10); // 10x default speed
+  const [loadingMessage, setLoadingMessage] = useState("Loading F1 Live Data...");
+  const [isLoadingTrack, setIsLoadingTrack] = useState(false);
 
-    { name: "LEC", color: "#DC0000", progress: 100, speed: 2.30 },
-    { name: "HAM", color: "#DC0000", progress: 125, speed: 2.28 },
+  // Active Positions & Telemetry HUD
+  const [selectedDriver, setSelectedDriver] = useState(null);
+  const [currentTelemetry, setCurrentTelemetry] = useState(null);
+  const [locationBuffer, setLocationBuffer] = useState([]);
+  const [bufferRange, setBufferRange] = useState(null);
 
-    { name: "RUS", color: "#00D2BE", progress: 150, speed: 2.26 },
-    { name: "ANT", color: "#00D2BE", progress: 175, speed: 2.22 },
+  // Telemetry buffer for selected driver
+  const [telemetryBuffer, setTelemetryBuffer] = useState([]);
+  const [telemetryRange, setTelemetryRange] = useState(null);
 
-    { name: "ALO", color: "#006F62", progress: 200, speed: 2.10 },
-    { name: "STR", color: "#006F62", progress: 225, speed: 2.08 },
+  // Refs for background control
+  const isFetchingBuffer = useRef(false);
+  const isFetchingTelemetry = useRef(false);
 
-    { name: "GAS", color: "#0090FF", progress: 250, speed: 2.06 },
-    { name: "COL", color: "#0090FF", progress: 275, speed: 2.02 },
-
-    { name: "OCO", color: "#B6BABD", progress: 300, speed: 2.00 },
-    { name: "BEA", color: "#B6BABD", progress: 325, speed: 1.98 },
-
-    { name: "ALB", color: "#005AFF", progress: 350, speed: 2.04 },
-    { name: "SAI", color: "#005AFF", progress: 375, speed: 2.01 },
-
-    { name: "HUL", color: "#52E252", progress: 400, speed: 1.96 },
-    { name: "BOR", color: "#52E252", progress: 425, speed: 1.94 },
-
-    { name: "HAD", color: "#FFFFFF", progress: 450, speed: 1.92 },
-    { name: "LAW", color: "#FFFFFF", progress: 475, speed: 1.90 },
-  ];
-
-
+  // --- Fetch Sessions on Mount / Year Change ---
   useEffect(() => {
-    const svg = svgRef.current;
-    const path = document.getElementById("track-path");
+    setLoadingMessage(`Fetching ${selectedYear} F1 Calendar...`);
+    fetch(`https://api.openf1.org/v1/sessions?year=${selectedYear}`)
+      .then(res => res.json())
+      .then(data => {
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          setLoadingMessage(`Unable to load F1 sessions for ${selectedYear} from API.`);
+          return;
+        }
 
-    // Make sure all elements exist
-    if (!path || !svg) {
-      console.error('Missing elements:', { path, svg });
+        // Group by GP (meeting_key)
+        const gpMap = {};
+        data.forEach(s => {
+          if (!s.meeting_key || s.is_cancelled) return;
+          const key = s.meeting_key;
+          if (!gpMap[key]) {
+            gpMap[key] = {
+              meeting_key: key,
+              location: s.location || s.circuit_short_name,
+              circuit_name: s.circuit_short_name,
+              country: s.country_name,
+              country_code: s.country_code,
+              sessions: []
+            };
+          }
+          gpMap[key].sessions.push(s);
+        });
+
+        // Convert to sorted array (chronological by first session date)
+        const list = Object.values(gpMap).sort((a, b) => {
+          const aDate = new Date(a.sessions[0]?.date_start || 0);
+          const bDate = new Date(b.sessions[0]?.date_start || 0);
+          return bDate - aDate; // Show latest Grand Prix first
+        });
+
+        setGrandPrixList(list);
+
+        // Auto-select latest Grand Prix and its Race session
+        if (list.length > 0) {
+          const latestGP = list[0];
+          setSelectedMeetingKey(latestGP.meeting_key.toString());
+
+          // Find Race session or default to the last session
+          const raceSession = latestGP.sessions.find(s => s.session_name === "Race" || s.session_type === "Race") || latestGP.sessions[latestGP.sessions.length - 1];
+          if (raceSession) {
+            setSelectedSessionKey(raceSession.session_key.toString());
+            setSelectedSession(raceSession);
+          }
+        }
+      })
+      .catch(err => {
+        console.error("Error loading sessions:", err);
+        setLoadingMessage("Failed to connect to F1 API. Please refresh the page.");
+      });
+  }, [selectedYear]);
+
+  // --- Handle GP Select ---
+  const handleGPChange = (meetingKey) => {
+    setSelectedMeetingKey(meetingKey);
+    const gp = grandPrixList.find(g => g.meeting_key.toString() === meetingKey);
+    if (gp && gp.sessions.length > 0) {
+      // Prioritize Race -> Sprint -> Qualifying -> Practice
+      const sorted = [...gp.sessions].sort((a, b) => {
+        const order = { "Race": 1, "Sprint": 2, "Qualifying": 3, "Practice": 4 };
+        const aVal = order[a.session_name] || order[a.session_type] || 5;
+        const bVal = order[b.session_name] || order[b.session_type] || 5;
+        return aVal - bVal;
+      });
+      const primarySession = sorted[0];
+      setSelectedSessionKey(primarySession.session_key.toString());
+      setSelectedSession(primarySession);
+    }
+  };
+
+  // --- Handle Session Select ---
+  const handleSessionChange = (sessionKey) => {
+    setSelectedSessionKey(sessionKey);
+    const gp = grandPrixList.find(g => g.meeting_key.toString() === selectedMeetingKey);
+    if (gp) {
+      const s = gp.sessions.find(x => x.session_key.toString() === sessionKey);
+      if (s) setSelectedSession(s);
+    }
+  };
+
+  // --- Fetch Session Data (Drivers, Track, Position) ---
+  useEffect(() => {
+    if (!selectedSession) return;
+
+    setIsPlaying(false);
+    setLoadingMessage(`Loading data for GP weekend in ${selectedSession.location}...`);
+    setIsLoadingTrack(true);
+    setTrackPath("");
+    setScaleInfo(null);
+    setDrivers({});
+    setDriversList([]);
+    setLocationBuffer([]);
+    setBufferRange(null);
+    setTelemetryBuffer([]);
+    setTelemetryRange(null);
+    setCurrentTelemetry(null);
+
+    const sessionKey = selectedSession.session_key;
+
+    // 1. Fetch Drivers
+    fetch(`https://api.openf1.org/v1/drivers?session_key=${sessionKey}`)
+      .then(res => res.json())
+      .then(driversData => {
+        if (!Array.isArray(driversData)) {
+          throw new Error("Drivers data is not an array");
+        }
+
+        const driverMap = {};
+        driversData.forEach(d => {
+          driverMap[d.driver_number] = {
+            number: d.driver_number,
+            name: d.name_acronym || d.broadcast_name || "DRV",
+            fullName: d.full_name,
+            team: d.team_name || "Independent",
+            color: d.team_colour ? `#${d.team_colour}` : "#FFFFFF",
+            headshot: d.headshot_url || "https://media.formula1.com/d_driver_fallback_image.png"
+          };
+        });
+
+        setDrivers(driverMap);
+        setDriversList(driversData);
+
+        // Default selected driver for Telemetry HUD
+        if (driversData.length > 0) {
+          setSelectedDriver(driversData[0].driver_number);
+        }
+
+        // 2. Fetch Position History for Leaderboard and pass driversData forward
+        return Promise.all([
+          fetch(`https://api.openf1.org/v1/position?session_key=${sessionKey}`).then(r => r.json()),
+          driversData
+        ]);
+      })
+      .then(([positionsData, driversData]) => {
+        setPositionHistory(Array.isArray(positionsData) ? positionsData : []);
+
+        // Set session time bounds
+        const start = new Date(selectedSession.date_start);
+        const end = selectedSession.date_end ? new Date(selectedSession.date_end) : new Date(start.getTime() + 2 * 60 * 60 * 1000);
+        
+        setSessionStart(start);
+        setSessionEnd(end);
+        setPlaybackTime(start);
+
+        // 3. Generate Track Path using first driver's completed lap
+        const driverNumbers = Array.isArray(driversData) && driversData.length > 0 
+          ? driversData.map(d => d.driver_number) 
+          : [1, 3, 16, 44, 63, 81];
+        
+        const trackDriver = driverNumbers[0] || 1;
+        return fetch(`https://api.openf1.org/v1/laps?session_key=${sessionKey}&driver_number=${trackDriver}`)
+          .then(r => r.json());
+      })
+      .then(lapsData => {
+        if (!Array.isArray(lapsData) || lapsData.length === 0) {
+          throw new Error("Laps data is empty or invalid");
+        }
+
+        // Find a representative completed lap (e.g. Lap 2 or 3 is usually good)
+        const validLap = lapsData.find(l => l.lap_duration && l.date_start && !l.is_pit_out_lap && l.lap_number > 1) 
+          || lapsData.find(l => l.lap_duration && l.date_start)
+          || { date_start: selectedSession.date_start, lap_duration: 80 }; // fallback
+
+        const startLapStr = validLap.date_start;
+        const durationSec = validLap.lap_duration;
+        const endLapStr = new Date(new Date(startLapStr).getTime() + durationSec * 1000).toISOString();
+
+        // Fetch location details for this lap
+        const trackDriver = lapsData[0]?.driver_number || 1;
+        return fetch(`https://api.openf1.org/v1/location?session_key=${sessionKey}&driver_number=${trackDriver}&date>=${startLapStr}&date<=${endLapStr}`)
+          .then(r => r.json());
+      })
+      .then(locationData => {
+        if (!Array.isArray(locationData) || locationData.length === 0) {
+          throw new Error("No telemetry locations found for track reconstruction");
+        }
+
+        // Process coordinates to scale to our SVG viewport
+        const { path, scaleInfo } = processCoordinates(locationData, 600, 600, 40);
+        setTrackPath(path);
+        setScaleInfo(scaleInfo);
+        setIsLoadingTrack(false);
+        setLoadingMessage("");
+      })
+      .catch(err => {
+        console.error("Error setting up session data:", err);
+        // Fallback layout from database if coordinate loading fails
+        const fallbackTrack = staticTracks[selectedSession?.circuit_short_name];
+        if (fallbackTrack) {
+          setTrackPath(fallbackTrack.path);
+          setScaleInfo(fallbackTrack.scaleInfo);
+        } else {
+          // Spielberg-like mock fallback if not in database
+          setTrackPath("M150,150 C250,50 450,50 450,200 C450,350 550,450 450,550 C350,550 150,550 150,400 C150,250 50,250 150,150 Z");
+          setScaleInfo({ minX: -5000, maxX: 5000, minY: -5000, maxY: 5000, scale: 0.05, dx: 150, dy: 150 });
+        }
+        setIsLoadingTrack(false);
+        setLoadingMessage("");
+      });
+  }, [selectedSession]);
+
+  // Coordinate conversion helper
+  const processCoordinates = (points, width = 600, height = 600, padding = 40) => {
+    if (!points || points.length === 0) return { path: "", scaleInfo: null };
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    points.forEach(p => {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    });
+
+    const wTrack = maxX - minX;
+    const hTrack = maxY - minY;
+
+    if (wTrack === 0 || hTrack === 0) return { path: "", scaleInfo: null };
+
+    const wAvail = width - 2 * padding;
+    const hAvail = height - 2 * padding;
+
+    // Maintain aspect ratio
+    const scale = Math.min(wAvail / wTrack, hAvail / hTrack);
+
+    const dx = padding + (wAvail - wTrack * scale) / 2;
+    const dy = padding + (hAvail - hTrack * scale) / 2;
+
+    const scaleInfo = { minX, maxX, minY, maxY, scale, dx, dy };
+
+    // Form SVG Path
+    const pathPoints = points.map(p => {
+      const sx = dx + (p.x - minX) * scale;
+      const sy = dy + (scaleInfo.maxY - p.y) * scale; // Invert Y for screen coordinates
+      return `${sx.toFixed(1)},${sy.toFixed(1)}`;
+    });
+
+    return {
+      path: `M ${pathPoints.join(" L ")} Z`,
+      scaleInfo
+    };
+  };
+
+  // --- Playback Timer Effect ---
+  useEffect(() => {
+    if (!isPlaying || !playbackTime || !sessionEnd) return;
+
+    const interval = setInterval(() => {
+      setPlaybackTime(prev => {
+        const next = new Date(prev.getTime() + (100 * playbackSpeed));
+        if (next >= sessionEnd) {
+          setIsPlaying(false);
+          return sessionEnd;
+        }
+        return next;
+      });
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, playbackSpeed, sessionEnd]);
+
+  // --- Streaming & Buffer Location Data ---
+  useEffect(() => {
+    if (!selectedSession || !playbackTime) return;
+
+    const time = new Date(playbackTime);
+    
+    // Check if we need to fetch a new buffer chunk
+    const needsFetch = !bufferRange || 
+      time < new Date(bufferRange.start) || 
+      time > new Date(new Date(bufferRange.end).getTime() - 15000);
+
+    if (needsFetch && !isFetchingBuffer.current) {
+      isFetchingBuffer.current = true;
+      const fetchStart = time.toISOString();
+      // Scale chunk size with playback speed to prevent rapid requests at high speeds
+      const bufferDurationMs = Math.max(120000, playbackSpeed * 10000); 
+      const fetchEnd = new Date(time.getTime() + bufferDurationMs).toISOString();
+
+      fetch(`https://api.openf1.org/v1/location?session_key=${selectedSession.session_key}&date>=${fetchStart}&date<=${fetchEnd}`)
+        .then(res => res.json())
+        .then(data => {
+          setLocationBuffer(data || []);
+          setBufferRange({ start: fetchStart, end: fetchEnd });
+          isFetchingBuffer.current = false;
+        })
+        .catch(err => {
+          console.error("Error fetching location buffer:", err);
+          isFetchingBuffer.current = false;
+        });
+    }
+  }, [playbackTime, selectedSession, playbackSpeed, bufferRange]);
+
+  // --- Telemetry Buffer for HUD ---
+  useEffect(() => {
+    if (!selectedSession || !selectedDriver || !playbackTime) return;
+
+    const time = new Date(playbackTime);
+    
+    const needsFetch = !telemetryRange || 
+      time < new Date(telemetryRange.start) || 
+      time > new Date(new Date(telemetryRange.end).getTime() - 5000);
+
+    if (needsFetch && !isFetchingTelemetry.current) {
+      isFetchingTelemetry.current = true;
+      const fetchStart = time.toISOString();
+      const bufferDurationMs = Math.max(60000, playbackSpeed * 5000);
+      const fetchEnd = new Date(time.getTime() + bufferDurationMs).toISOString();
+
+      fetch(`https://api.openf1.org/v1/car_data?session_key=${selectedSession.session_key}&driver_number=${selectedDriver}&date>=${fetchStart}&date<=${fetchEnd}`)
+        .then(res => res.json())
+        .then(data => {
+          setTelemetryBuffer(data || []);
+          setTelemetryRange({ start: fetchStart, end: fetchEnd });
+          isFetchingTelemetry.current = false;
+        })
+        .catch(err => {
+          console.error("Error fetching telemetry buffer:", err);
+          isFetchingTelemetry.current = false;
+        });
+    }
+  }, [playbackTime, selectedSession, selectedDriver, playbackSpeed, telemetryRange]);
+
+  // --- Extract Current Car Telemetry on Tick ---
+  useEffect(() => {
+    if (!playbackTime || telemetryBuffer.length === 0) {
+      setCurrentTelemetry(null);
       return;
     }
 
-    const length = path.getTotalLength();
+    const playTimeMs = playbackTime.getTime();
+    // Find closest telemetry record
+    let closestRecord = null;
+    let minDiff = Infinity;
 
-    function animate() {
-      drivers.forEach((driver, index) => {
-        driver.progress += driver.speed;
+    for (let i = 0; i < telemetryBuffer.length; i++) {
+      const rec = telemetryBuffer[i];
+      const recTime = new Date(rec.date).getTime();
+      const diff = Math.abs(recTime - playTimeMs);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestRecord = rec;
+      }
+    }
 
-        if (driver.progress > length) {
-          driver.progress = 0;
-        }
+    // Only use if within reasonable window (e.g. 5 seconds)
+    if (minDiff < 5000) {
+      setCurrentTelemetry(closestRecord);
+    } else {
+      setCurrentTelemetry(null);
+    }
+  }, [playbackTime, telemetryBuffer]);
 
-        const point = path.getPointAtLength(driver.progress);
+  // --- Compute Live Standings (Leaderboard) ---
+  const getLiveLeaderboard = () => {
+    try {
+      if (!playbackTime || !Array.isArray(positionHistory) || positionHistory.length === 0) {
+        // Fallback: alphabetical/numerical order
+        return Object.values(drivers).sort((a, b) => a.number - b.number);
+      }
 
-        const car = carsRef.current[index];
-
-        if (car) {
-          car.setAttribute("cx", point.x);
-          car.setAttribute("cy", point.y);
+      const playTimeMs = playbackTime.getTime();
+      
+      // Find the latest position record for each driver
+      const latestPositions = {};
+      positionHistory.forEach(h => {
+        if (!h || !h.date) return;
+        const hTime = new Date(h.date).getTime();
+        if (hTime <= playTimeMs) {
+          const existing = latestPositions[h.driver_number];
+          if (!existing || hTime > new Date(existing.date).getTime()) {
+            latestPositions[h.driver_number] = h.position;
+          }
         }
       });
 
-      requestAnimationFrame(animate);
-    }
+      // Merge standings with driver metadata
+      const standings = Object.values(drivers).map(d => {
+        const currentPos = latestPositions[d.number] || 99; // default to back if unknown
+        return {
+          ...d,
+          position: currentPos
+        };
+      });
 
-    animate();
-  }, []);
+      // Sort by position ascending
+      return standings.sort((a, b) => a.position - b.position);
+    } catch (err) {
+      console.error("Error computing leaderboard standings:", err);
+      return Object.values(drivers).sort((a, b) => a.number - b.number);
+    }
+  };
+
+  // --- Compute Active Driver Coordinates on Track ---
+  const getActiveCoordinates = () => {
+    try {
+      if (!playbackTime || !Array.isArray(locationBuffer) || locationBuffer.length === 0 || !scaleInfo) return [];
+
+      const playTimeMs = playbackTime.getTime();
+      const activeLocs = {};
+
+      // Group locations and find closest sample before/near playbackTime
+      locationBuffer.forEach(loc => {
+        if (!loc || !loc.date) return;
+        const locTime = new Date(loc.date).getTime();
+        // Allow slightly future points (up to 1s) for smoother movement
+        if (locTime <= playTimeMs + 500) {
+          const existing = activeLocs[loc.driver_number];
+          if (!existing || locTime > new Date(existing.date).getTime()) {
+            activeLocs[loc.driver_number] = loc;
+          }
+        }
+      });
+
+      return Object.values(drivers).map(d => {
+        const loc = activeLocs[d.number];
+        if (!loc) return null;
+
+        // Project onto screen dimensions
+        const sx = scaleInfo.dx + (loc.x - scaleInfo.minX) * scaleInfo.scale;
+        const sy = scaleInfo.dy + (scaleInfo.maxY - loc.y) * scaleInfo.scale;
+
+        return {
+          driverNumber: d.number,
+          acronym: d.name,
+          color: d.color,
+          x: sx,
+          y: sy
+        };
+      }).filter(Boolean);
+    } catch (err) {
+      console.error("Error computing active coordinates:", err);
+      return [];
+    }
+  };
+
+  const activeDots = getActiveCoordinates();
+  const leaderboard = getLiveLeaderboard();
+
+  // Helper formatting session duration slider
+  const getSessionProgress = () => {
+    if (!playbackTime || !sessionStart || !sessionEnd) return 0;
+    const total = sessionEnd.getTime() - sessionStart.getTime();
+    const current = playbackTime.getTime() - sessionStart.getTime();
+    return total > 0 ? (current / total) * 100 : 0;
+  };
+
+  const handleSliderChange = (e) => {
+    if (!sessionStart || !sessionEnd) return;
+    const percentage = parseFloat(e.target.value);
+    const total = sessionEnd.getTime() - sessionStart.getTime();
+    const targetMs = sessionStart.getTime() + (total * (percentage / 100));
+    
+    // Clear buffers to force reload at new spot
+    setLocationBuffer([]);
+    setBufferRange(null);
+    setTelemetryBuffer([]);
+    setTelemetryRange(null);
+
+    setPlaybackTime(new Date(targetMs));
+  };
+
+  // Time formatter (HH:MM:SS relative to start)
+  const formatSessionTime = () => {
+    if (!playbackTime || !sessionStart) return "00:00:00";
+    const diffMs = playbackTime.getTime() - sessionStart.getTime();
+    if (diffMs < 0) return "00:00:00";
+
+    const hrs = Math.floor(diffMs / 3600000);
+    const mins = Math.floor((diffMs % 3600000) / 60000);
+    const secs = Math.floor((diffMs % 60000) / 1000);
+
+    const pad = (n) => n.toString().padStart(2, '0');
+    return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+  };
+
+  // Selected driver detail
+  const currentDriverDetails = drivers[selectedDriver];
 
   return (
     <>
       <nav>
-        <img src={logo} alt="logo" />
-
-        <div className='nav-menu'>
-          <span>Home</span>
-          <span>Drivers</span>
-          <span>Circuits</span>
+        <div className="nav-brand">
+          <img src={logo} alt="F1 Logo" />
+          <h1 className="nav-title">F1 LIVE TRACKER</h1>
         </div>
+
+        {grandPrixList.length > 0 && (
+          <div className="nav-controls">
+            <div className="select-container">
+              <label>SEASON</label>
+              <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)}>
+                <option value="2026">2026</option>
+                <option value="2025">2025</option>
+                <option value="2024">2024</option>
+                <option value="2023">2023</option>
+              </select>
+            </div>
+
+            <div className="select-container">
+              <label>GRAND PRIX</label>
+              <select value={selectedMeetingKey} onChange={(e) => handleGPChange(e.target.value)}>
+                {grandPrixList.map(g => (
+                  <option key={g.meeting_key} value={g.meeting_key}>
+                    {g.location} ({g.circuit_name})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="select-container">
+              <label>SESSION</label>
+              <select value={selectedSessionKey} onChange={(e) => handleSessionChange(e.target.value)}>
+                {selectedMeetingKey && grandPrixList
+                  .find(g => g.meeting_key.toString() === selectedMeetingKey)
+                  ?.sessions.map(s => (
+                    <option key={s.session_key} value={s.session_key}>
+                      {s.session_name}
+                    </option>
+                  ))
+                }
+              </select>
+            </div>
+          </div>
+        )}
       </nav>
 
-      <main>
-        <div className='leaderboard'>
-          <h2>Leaderboard</h2>
+      {loadingMessage && (
+        <div className="loading-screen">
+          <div className="loader"></div>
+          <p>{loadingMessage}</p>
         </div>
+      )}
 
-        <svg
-          ref={svgRef}
-          className="track-map"
-          xmlns="http://www.w3.org/2000/svg"
-          width="600"
-          height="600"
-          viewBox="-10 -60 300 600"
-        >
-          <path
-            d="M187.132 258.577c2.83-3.815 6.413-9.565 13.577-10.593 13.554-1.944 21.828 1.404 35.111 3.348 16.012 2.344 24.823-.431 33.316-6.912 16.091-12.281 27.87-21.819 38.54-30.677 7.154-5.938 13.066-1.296 14.154 3.024 1.523 6.05 2.831 11.45 6.969 24.844 1.656 5.362 9.362 7.346 12.628.432 5.003-10.589 6.313-15.666 7.839-21.819 5.617-22.642-.695-28.128-2.83-30.029-29.832-26.571-120.874-108.733-128.253-115.577-10.017-9.29-28.416-4.536-29.233 4.861-.816 9.398-.899 12.315-1.306 17.985-.25 3.466-7.266 17.717-20.74 12.8-14.209-5.185-7.879-20.646-7.325-21.701 7.29-13.886 15.623-29.211 20.505-37.048 9.58-15.378 25.704-25.296 39.407-26.584 18.917-1.78 76.237-6.805 105.634-9.258 2.916-.243 5.556-.498 7.862-.65 7.843-.516 21.345 4.846 24.827 16.658 8.166 27.706 12.928 43.496 14.332 67.407 1.269 21.603 2.421 42.276 2.653 49.736.278 8.92 1.882 13.375 9.635 24.627.68.984 1.46 2.099 2.315 3.333 2.182 3.148 3.236 7.36-.247 16.434-3.793 9.88-9.554 20.467-9.145 29.812.546 12.475 4.325 13.683 9.363 19.66 10.017 11.882 7.186 25.707-4.62 32.755-4.323 2.58-8.564 4.969-12.364 7.211-9.437 5.57-13.513 9.501-18.29 19.28-12.957 26.518-83.893 152.682-99.075 173.203-12.588 17.013-38.433 10.532-43.659-6.643-1.42-4.666-16.26-30.392-20.577-34.403-10.234-9.505-16.766-16.417-20.25-21.17-3.42-4.668-7.676-9.398-13.882-17.337-2.815-3.6-6.621-5.117-10.615-.81-3.291 3.549-5.422 5.822-7.408 7.183-2.547 1.745-8.378 1.89-11.644-1.998-1.713-2.04-10.749-12.65-14.154-22.035-3.919-10.802-5.688-12.142 5.771-27.113 10.997-14.365 52.26-67.725 59.227-76.475 2.784-3.497 7.22-9.384 11.952-15.761z"
-            fill="none"
-            stroke="#000"
-            strokeWidth="20"
-            strokeLinejoin="round"
-          />
+      <main className="dashboard-grid">
+        {/* Left Column: Leaderboard */}
+        <section className="leaderboard-card">
+          <div className="panel-header">
+            <h2>STANDINGS</h2>
+            <div className="live-pill">
+              <span className="live-dot"></span>
+              {isPlaying ? "PLAYING" : "PAUSED"}
+            </div>
+          </div>
 
-          <path
-            d="m125.68 305.699 30.648 25.705-6.226 7.825-30.647-25.705z"
-            fill="#000"
-          />
+          <div className="leaderboard-table-container">
+            <table className="leaderboard-table">
+              <thead>
+                <tr>
+                  <th>POS</th>
+                  <th>DRIVER</th>
+                  <th>TEAM</th>
+                  <th style={{ textAlign: 'right' }}>NO.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leaderboard.map((drv, idx) => (
+                  <tr
+                    key={drv.number}
+                    className={`leaderboard-row ${selectedDriver === drv.number ? 'selected' : ''}`}
+                    onClick={() => {
+                      setSelectedDriver(drv.number);
+                      setTelemetryBuffer([]);
+                      setTelemetryRange(null);
+                    }}
+                  >
+                    <td className="pos-col">{idx + 1}</td>
+                    <td className="driver-col">
+                      <span className="team-indicator" style={{ backgroundColor: drv.color }}></span>
+                      <span className="driver-name">{drv.name}</span>
+                    </td>
+                    <td className="team-col">{drv.team}</td>
+                    <td className="num-col" style={{ color: drv.color }}>#{drv.number}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-          <path
-            d="m106.618 298.376 4.446-.448 4.447-.448-.3 4.483-.299 4.484"
-            fill="none"
-            stroke="#000"
-            strokeWidth="2"
-            strokeLinecap="square"
-            strokeLinejoin="bevel"
-          />
+        {/* Center Column: Interactive Track & Playback */}
+        <section className="track-card">
+          <div className="track-container">
+            {isLoadingTrack ? (
+              <div className="track-loader">
+                <div className="loader"></div>
+                <p>Generating track map from telemetry...</p>
+              </div>
+            ) : (
+              <>
+                <div className="track-map-wrapper">
+                  <svg
+                    className="track-svg"
+                    viewBox="0 0 600 600"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    {/* Track base shape */}
+                    {trackPath && (
+                      <>
+                        <path
+                          d={trackPath}
+                          className="track-path-bg"
+                        />
+                        <path
+                          id="track-path-main"
+                          d={trackPath}
+                          className="track-path-fg"
+                        />
+                      </>
+                    )}
 
-          <path
-            id="track-path"
-            d="M187.132 258.577c2.83-3.815 6.413-9.565 13.577-10.593 13.554-1.944 21.828 1.404 35.111 3.348 16.012 2.344 24.823-.431 33.316-6.912 16.091-12.281 27.87-21.819 38.54-30.677 7.154-5.938 13.066-1.296 14.154 3.024 1.523 6.05 2.831 11.45 6.969 24.844 1.656 5.362 9.362 7.346 12.628.432 5.003-10.589 6.313-15.666 7.839-21.819 5.617-22.642-.695-28.128-2.83-30.029-29.832-26.571-120.874-108.733-128.253-115.577-10.017-9.29-28.416-4.536-29.233 4.861-.816 9.398-.899 12.315-1.306 17.985-.25 3.466-7.266 17.717-20.74 12.8-14.209-5.185-7.879-20.646-7.325-21.701 7.29-13.886 15.623-29.211 20.505-37.048 9.58-15.378 25.704-25.296 39.407-26.584 18.917-1.78 76.237-6.805 105.634-9.258 2.916-.243 5.556-.498 7.862-.65 7.843-.516 21.345 4.846 24.827 16.658 8.166 27.706 12.928 43.496 14.332 67.407 1.269 21.603 2.421 42.276 2.653 49.736.278 8.92 1.882 13.375 9.635 24.627.68.984 1.46 2.099 2.315 3.333 2.182 3.148 3.236 7.36-.247 16.434-3.793 9.88-9.554 20.467-9.145 29.812.546 12.475 4.325 13.683 9.363 19.66 10.017 11.882 7.186 25.707-4.62 32.755-4.323 2.58-8.564 4.969-12.364 7.211-9.437 5.57-13.513 9.501-18.29 19.28-12.957 26.518-83.893 152.682-99.075 173.203-12.588 17.013-38.433 10.532-43.659-6.643-1.42-4.666-16.26-30.392-20.577-34.403-10.234-9.505-16.766-16.417-20.25-21.17-3.42-4.668-7.676-9.398-13.882-17.337-2.815-3.6-6.621-5.117-10.615-.81-3.291 3.549-5.422 5.822-7.408 7.183-2.547 1.745-8.378 1.89-11.644-1.998-1.713-2.04-10.749-12.65-14.154-22.035-3.919-10.802-5.688-12.142 5.771-27.113 10.997-14.365 52.26-67.725 59.227-76.475 2.784-3.497 7.22-9.384 11.952-15.761z"
-            fill="none"
-            stroke="#fff"
-            strokeWidth="5"
-            strokeLinejoin="round"
-          />
+                    {/* Active driver dots */}
+                    {activeDots.map(dot => (
+                      <g 
+                        key={dot.driverNumber}
+                        onClick={() => {
+                          setSelectedDriver(dot.driverNumber);
+                          setTelemetryBuffer([]);
+                          setTelemetryRange(null);
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <circle
+                          cx={dot.x}
+                          cy={dot.y}
+                          r={selectedDriver === dot.driverNumber ? "10" : "7"}
+                          fill={dot.color}
+                          className={`driver-dot-node ${selectedDriver === dot.driverNumber ? 'active-glow' : ''}`}
+                          style={{ transition: 'cx 0.3s ease-out, cy 0.3s ease-out' }}
+                        />
+                        <text
+                          x={dot.x}
+                          y={dot.y - 12}
+                          textAnchor="middle"
+                          fill="#ffffff"
+                          fontSize="10px"
+                          fontWeight="800"
+                          className="driver-dot-label"
+                          style={{ transition: 'x 0.3s ease-out, y 0.3s ease-out' }}
+                        >
+                          {dot.acronym}
+                        </text>
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+                {!isLoadingTrack && activeDots.length === 0 && (
+                  <div className="telemetry-warning-overlay">
+                    <p>No telemetry data available for this session</p>
+                    <span>Try selecting a completed session from 2024 or 2025 to view live telemetry playback.</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
-          {drivers.map((driver, index) => (
-            <circle
-              key={driver.name}
-              ref={(el) => (carsRef.current[index] = el)}
-              r="5"
-              fill={driver.color}
-              stroke="#fff"
-              strokeWidth="1"
-            />
-          ))}
-        </svg>
+          {/* Timeline & Playback Controller */}
+          <div className="playback-panel">
+            <div className="timeline-row">
+              <span className="elapsed-time">{formatSessionTime()}</span>
+              <input
+                type="range"
+                className="timeline-slider"
+                min="0"
+                max="100"
+                step="0.1"
+                value={getSessionProgress()}
+                onChange={handleSliderChange}
+              />
+              <span className="total-time">Race Session</span>
+            </div>
+
+            <div className="controls-row">
+              <button 
+                className={`btn-play ${isPlaying ? 'playing' : ''}`}
+                onClick={() => setIsPlaying(!isPlaying)}
+              >
+                {isPlaying ? (
+                  <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                )}
+                {isPlaying ? "PAUSE" : "PLAY"}
+              </button>
+
+              <div className="speed-selector">
+                <span className="speed-label">SPEED:</span>
+                {[1, 5, 15, 60, 120, 300].map(speed => (
+                  <button
+                    key={speed}
+                    className={`btn-speed ${playbackSpeed === speed ? 'active' : ''}`}
+                    onClick={() => setPlaybackSpeed(speed)}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Right Column: Telemetry HUD */}
+        <section className="hud-card">
+          <div className="panel-header">
+            <h2>TELEMETRY HUD</h2>
+          </div>
+
+          {currentDriverDetails ? (
+            <div className="hud-content">
+              {/* Driver ID card */}
+              <div className="driver-id-card">
+                <div className="driver-photo-container" style={{ borderColor: currentDriverDetails.color }}>
+                  <img src={currentDriverDetails.headshot} alt={currentDriverDetails.fullName} />
+                </div>
+                <div className="driver-meta">
+                  <div className="num-badge" style={{ backgroundColor: currentDriverDetails.color }}>
+                    #{currentDriverDetails.number}
+                  </div>
+                  <h3>{currentDriverDetails.fullName}</h3>
+                  <p>{currentDriverDetails.team}</p>
+                </div>
+              </div>
+
+              {/* Live Gauges */}
+              <div className="hud-gauges">
+                {/* Circular Speed & RPM Gauge */}
+                <div className="speedometer-container">
+                  <svg className="speed-gauge" viewBox="0 0 200 200">
+                    <circle cx="100" cy="100" r="85" className="gauge-track" />
+                    <circle 
+                      cx="100" 
+                      cy="100" 
+                      r="85" 
+                      className="gauge-fill" 
+                      strokeDasharray="534"
+                      strokeDashoffset={534 - (534 * (currentTelemetry?.speed || 0)) / 360}
+                      stroke={currentDriverDetails.color}
+                    />
+                  </svg>
+                  <div className="speed-value">
+                    <span className="num">{currentTelemetry?.speed || 0}</span>
+                    <span className="unit">KM/H</span>
+                  </div>
+                </div>
+
+                {/* RPM & Gear grid */}
+                <div className="telemetry-grid">
+                  <div className="tel-metric gear-metric">
+                    <span className="label">GEAR</span>
+                    <span className="value-gear">
+                      {currentTelemetry ? (currentTelemetry.n_gear === 0 ? "N" : currentTelemetry.n_gear) : "-"}
+                    </span>
+                  </div>
+
+                  <div className="tel-metric rpm-metric">
+                    <span className="label">RPM</span>
+                    <span className="value">{currentTelemetry?.rpm || 0}</span>
+                  </div>
+
+                  <div className="tel-metric drs-metric">
+                    <span className="label">DRS</span>
+                    <span className={`drs-badge ${
+                      currentTelemetry?.drs >= 9 ? 'active' : 
+                      currentTelemetry?.drs === 8 ? 'eligible' : 'closed'
+                    }`}>
+                      {currentTelemetry ? (
+                        currentTelemetry.drs >= 9 ? "ACTIVE" : 
+                        currentTelemetry.drs === 8 ? "DETECTED" : "CLOSED"
+                      ) : "CLOSED"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Pedal inputs */}
+                <div className="pedals-container">
+                  <div className="pedal-row">
+                    <div className="pedal-label">THROTTLE (GAS)</div>
+                    <div className="pedal-bar-bg">
+                      <div 
+                        className="pedal-bar-fill throttle" 
+                        style={{ width: `${currentTelemetry?.throttle || 0}%` }}
+                      ></div>
+                    </div>
+                    <div className="pedal-value">{currentTelemetry?.throttle || 0}%</div>
+                  </div>
+
+                  <div className="pedal-row">
+                    <div className="pedal-label">BRAKE PRESSURE</div>
+                    <div className="pedal-bar-bg">
+                      <div 
+                        className="pedal-bar-fill brake" 
+                        style={{ width: `${currentTelemetry?.brake > 0 ? (typeof currentTelemetry.brake === 'boolean' ? 100 : currentTelemetry.brake) : 0}%` }}
+                      ></div>
+                    </div>
+                    <div className="pedal-value">
+                      {currentTelemetry ? (
+                        currentTelemetry.brake > 0 ? (typeof currentTelemetry.brake === 'boolean' ? '100%' : `${currentTelemetry.brake}%`) : '0%'
+                      ) : '0%'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="hud-placeholder">
+              <p>Select a driver dot on the map or row in standings to see real-time cockpit telemetry.</p>
+            </div>
+          )}
+        </section>
       </main>
-
     </>
   )
 }
