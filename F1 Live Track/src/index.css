@@ -812,8 +812,40 @@ nav {
 }
 
 @media (max-width: 900px) {
+  nav {
+    flex-direction: column;
+    height: auto;
+    padding: 16px;
+    gap: 16px;
+    align-items: stretch;
+  }
+
+  .nav-brand {
+    justify-content: center;
+  }
+
+  .nav-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .nav-controls select {
+    min-width: 0;
+    width: 100%;
+  }
+
   .dashboard-grid {
     grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 16px;
+    height: auto;
+    overflow-y: auto;
+  }
+  
+  .track-card {
+    height: 500px;
   }
   
   .leaderboard-card,
@@ -821,9 +853,22 @@ nav {
     grid-column: span 1;
     height: 450px;
   }
-  
-  .nav-controls {
-    display: none; /* Hide selections on small viewports for ease */
+}
+
+@media (max-width: 480px) {
+  .nav-title {
+    font-size: 16px;
+    letter-spacing: 1px;
+    padding-left: 10px;
+  }
+
+  .track-card {
+    height: 400px;
+  }
+
+  .pedal-row {
+    grid-template-columns: 100px 1fr 35px;
+    gap: 8px;
   }
 }
 
